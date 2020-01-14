@@ -18,6 +18,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import argparse
+import base64
 import http
 import logging
 import os
@@ -32,15 +33,77 @@ from common.utils import init_logger  #pylint: disable=wrong-import-position
 
 LOGGER = logging.getLogger(__name__)
 
+# The workflow:
+# 1. try v2 function, if not v2 support, ignore
+# 2. use WWW-Authenticate to get auth method if schema is Bearer
+# 3. get token by modify the request
+# 4. Try to get image manifest, use HEAD, don't need response body
 
-def _is_docker_hub_uri(uri):
+
+class ImageChecker():
+    def __init__(self, job_config, secret):
+        prerequisites = job_config["prerequisites"]
+        task_role_name = os.getenv("PAI_CURRENT_TASK_ROLE_NAME")
+        task_role = job_config["taskRoles"][task_role_name]
+        docker_image_name = task_role["dockerImage"]
+
+        docker_images = list(
+            filter(lambda pre: pre["name"] == docker_image_name,
+                   prerequisites))
+        assert len(docker_images) == 1
+        image_info = docker_images[0]
+
+        self.bearer_token = ""
+        self.basic_auth_token = ""
+        self.docker_image = image_info["uri"]
+        self.registry_uri = ""
+
+        if "auth" in image_info:
+            auth = image_info["auth"]
+            self._init_auth_info(auth)
+
+    def _init_auth_info(self, auth) -> None:
+        if "registryuri" in auth:
+            self.registry_uri = self._get_registry_uri(auth["registryuri"])
+        else:
+            self.registry_uri = "https://index.docker.io/"
+        username = auth["username"] if "username" in auth else ""
+        password = auth["password"] if "password" in auth else ""
+        if username and password:
+            self.basic_auth_token = base64.b64decode("{}:{}".format(
+                username, password)).decode()
+
+    def _get_registry_uri(self, uri) -> str:
+        ret_uri: str = uri
+        if not ret_uri.startswith("http") and not ret_uri.startswith("https"):
+            ret_uri = "https:{}".format(ret_uri)
+        chunks = ret_uri.split('/')
+        api_version_str = chunks[-1]
+        if api_version_str == "v1" or api_version_str == "v2":
+            return "/".join(chunks[:-1])
+        return ret_uri
+
+    def _parse_auth_challenges(self):
+        pass
+
+    def _is_registry_v2_supportted(self) -> bool:
+        pass
+
+    def _login_v2_registry(self):
+        self._is_registry_v2_supportted()
+
+    def is_docker_image_accessible(self):
+        pass
+
+
+def _is_docker_hub_uri(uri) -> bool:
     if re.fullmatch(r"(?:[a-z\-_.0-9]+\/)?[a-z\-_.0-9]+(?::[a-z\-_.0-9]+)?",
                     uri):
         return True
     return False
 
 
-def _get_docker_repository_name(image_name):
+def _get_docker_repository_name(image_name) -> str:
     paths = image_name.split("/")
     if len(paths) == 1:
         return "library/{}".format(paths[0])
